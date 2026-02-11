@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECharts 波形图模拟</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+            background-color: #e0f2f7; /* 柔和的蓝色背景 */
+            color: #333; /* 默认文字颜色改为深色，适应浅色背景 */
+        }
+        .controls {
+            margin-bottom: 20px;
+            text-align: center;
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls label {
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .controls select {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin-right: 20px;
+            font-size: 14px;
+            background-color: #f9f9f9;
+            cursor: pointer;
+        }
+        .chart-container {
+            width: 100%;
+            height: 400px; /* 每个图的高度 */
+            margin-bottom: 20px;
+            background-color: #ffffff; /* 图表容器背景色改为亮白色 */
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); /* 调整阴影以适应浅色背景 */
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        h2 {
+            text-align: center;
+            color: #333; /* 标题文字颜色改为深色 */
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <label for="channel-select">CH:</label>
+        <select id="channel-select"></select>
+
+        <label for="range-select">量程:</label>
+        <select id="range-select"></select>
+        
+        <button id="clear-measurements-btn" style="margin-left:4px;padding:8px 12px;border-radius:4px;border:1px solid #ccc;background:#ff6b4a;color:#fff;cursor:pointer;">清除测量</button>
+       
+    </div>
+
+    <h2>高频波形图 (12 通道)</h2>
+    <div id="chart-hf" class="chart-container"></div>
+
+    <h2>低频波形图 (12 通道)</h2>
+    <div id="chart-lf" class="chart-container"></div>
+
+    <h2>散点图 (模拟数据)</h2>
+    <div class="controls">
+        <label for="maxRectangles" style="margin-left:12px;">散点最大框选数:</label>
+        <input id="maxRectangles" type="number" min="1" value="7" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:4px;margin-right:8px;">
+        <button id="clearAllBtn" style="margin-left:8px;padding:8px 12px;border-radius:4px;border:1px solid #ccc;background:#4a90e2;color:#fff;cursor:pointer;">清除框选</button>
+        <div style="margin-top:8px;">
+            <span id="statusBar" style="margin-right:12px;color:#666;"></span>
+            <span id="rectanglesCount" style="margin-right:12px;color:#666;"></span>
+            <span style="margin-right:12px;color:#666;">最大: <span id="currentMaxRectangles" style="font-weight:bold;"></span></span>
+            <span id="coordinateInfo" style="margin-left:12px;color:#333;"></span>
+        </div>
+    </div>
+    <div id="chart-scatter" class="chart-container" style="height:360px"></div>
+
+    <!-- 引入 ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="app.js"></script>
+    <script src="scatterChart.js"></script>
+</body>
+</html>
