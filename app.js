@@ -2,7 +2,7 @@
 const NUM_CHANNELS = 12; // 每个图的通道数
 const POINTS_PER_CHANNEL = 2600; // 每个通道的点数
 const REFRESH_INTERVAL_MS = 100; // 刷新频率 (100ms = 10Hz)
-const VERTICAL_OFFSET_PER_CHANNEL = 0.8; // 每个通道的垂直偏移量
+const VERTICAL_OFFSET_PER_CHANNEL = 0; // 每个通道的垂直偏移量
 
 // ========== 箭头固定屏幕位置（像素坐标，相对于图表容器）==========
 const arrowFixedTopHF = Array(NUM_CHANNELS).fill(0);
@@ -153,7 +153,8 @@ function generateNewPoint(x, channelIndex, baseFrequency, amplitudeScale, channe
 function generateNewSeriesData(channelIndex, baseFrequency, amplitudeScale, channelStates) {
     const data = [];
     const chartType = channelStates === channelStatesHF ? 'HF' : 'LF';
-    const verticalOffset = getVerticalOffset(channelIndex, chartType);
+    // 获取当前通道的偏移量
+    const adjust = chartType === 'HF' ? channelAdjustHF[channelIndex] : channelAdjustLF[channelIndex];
 
     // 随机化频率和振幅，使每次刷新波形不同但保持平滑
     const frequency = baseFrequency * (0.8 + Math.random() * 0.4); // 频率在80%-120%之间变化
@@ -178,7 +179,8 @@ function generateNewSeriesData(channelIndex, baseFrequency, amplitudeScale, chan
         if (y > maxValue) y = maxValue;
         if (y < -maxValue) y = -maxValue;
 
-        data.push([i, y + verticalOffset]);
+        // 加上当前通道的偏移量
+        data.push([i, y + adjust]);
     }
 
     return data;
@@ -547,25 +549,10 @@ function createArrowControls(chart, chartType) {
     // 计算初始固定位置（按通道索引均匀分布，留出边距）
     function computeFixedPositions() {
         const containerHeight = container.clientHeight;
+        // 所有箭头都放在容器垂直居中位置
+        const fixedTop = (containerHeight - RECT_HEIGHT) / 2;
         for (let i = 0; i < NUM_CHANNELS; i++) {
-            const baseY = getVerticalOffset(i, chartType); // 数据Y值（基线）
-            try {
-                // 将数据坐标 (0, baseY) 转换为屏幕像素坐标
-                const pixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, baseY]);
-                // 箭头中心与基线对齐，因此 top = pixel[1] - 箭头高度的一半
-                fixedTopArray[i] = pixel[1] - RECT_HEIGHT / 2;
-                // 限制在容器范围内，防止箭头溢出
-                const minY = 0;
-                const maxY = containerHeight - RECT_HEIGHT;
-                fixedTopArray[i] = Math.max(minY, Math.min(maxY, fixedTopArray[i]));
-            } catch (e) {
-                // 转换失败时使用均匀分布作为后备（通常不会发生）
-                const margin = 20;
-                const startY = margin;
-                const endY = containerHeight - margin;
-                const step = NUM_CHANNELS > 1 ? (endY - startY) / (NUM_CHANNELS - 1) : 0;
-                fixedTopArray[i] = startY + i * step;
-            }
+            fixedTopArray[i] = fixedTop;
         }
     }
 
@@ -625,7 +612,7 @@ function createArrowControls(chart, chartType) {
                 width: 0;
                 height: 0;
                 border-style: solid;
-                border-width: ${RECT_HEIGHT/2}px ${TRIANGLE_WIDTH}px ${RECT_HEIGHT/2}px 0;
+                border-width: ${RECT_HEIGHT / 2}px ${TRIANGLE_WIDTH}px ${RECT_HEIGHT / 2}px 0;
                 border-color: transparent ${colors[i]} transparent transparent;
                 pointer-events: none;
             }
@@ -638,6 +625,14 @@ function createArrowControls(chart, chartType) {
         const onMouseDown = (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
+            const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+            arrowArray.forEach((el, idx) => {
+                if (el) {
+                    el.style.zIndex = idx === i ? '2500' : '1999';
+                }
+            });
+
+            // ========== 只做拖拽初始化 ==========
             el.style.cursor = 'ns-resize';
             dragging = true;
             moved = false;
@@ -671,18 +666,56 @@ function createArrowControls(chart, chartType) {
                 // 忽略转换错误
             }
         };
+
         const onMouseUp = (ev) => {
             dragging = false;
             el.style.cursor = 'pointer';
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
+
+            // 如果发生了移动（即拖拽），就不做通道切换；如果只是点击，就做通道切换
             if (!moved) {
-                // 点击未拖动：选中通道
+                // ========== 执行通道切换和量程应用 ==========
                 const id = `${chartType}_${i + 1}`;
                 currentSelectedChannelId = id;
                 channelSelect.value = id;
-                const presetRange = channelRanges.get(id) || '5V';
-                rangeSelect.value = presetRange;
+                rgSelect.value = channelRanges.get(id);
+
+                const visibleArray = chartType === 'HF' ? channelVisibleHF : channelVisibleLF;
+                const buffers = chartType === 'HF' ? dataBuffersHF : dataBuffersLF;
+                const chart = chartType === 'HF' ? chartHF : chartLF;
+                const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+
+                // 如果当前通道是隐藏的，则显示它
+                if (!visibleArray[i]) {
+                    visibleArray[i] = true;
+                    if (arrowArray[i]) {
+                        arrowArray[i].dataset.legendVisible = 'true';
+                    }
+                    if (chart) {
+                        const newData = buffers[i].slice();
+                        chart.setOption({
+                            series: [{
+                                index: i,
+                                data: newData
+                            }]
+                        }, false);
+                    }
+                }
+
+                // 调整箭头层级：当前通道箭头置顶，其余恢复默认
+                arrowArray.forEach((el, idx) => {
+                    if (el) {
+                        el.style.zIndex = idx === i ? '2500' : '1999';
+                    }
+                });
+
+                // 更新箭头显示状态
+                if (chart) {
+                    updateArrowPositions(chart, chartType);
+                }
+
+                // 应用量程
                 applyRangeToChart();
             }
         };
@@ -707,7 +740,7 @@ function createArrowControls(chart, chartType) {
     applyFixedPositions();
 
     // 监听 dataZoom 事件：缩放后重新应用固定位置（确保箭头不动）
-    chart.on('datazoom', function() {
+    chart.on('datazoom', function () {
         applyFixedPositions();
     });
 
@@ -819,7 +852,7 @@ function initControls() {
     try {
         const toggleBtn = document.getElementById('toggle-measurement-btn');
         if (toggleBtn) {
-            toggleBtn.addEventListener('click', function(ev) {
+            toggleBtn.addEventListener('click', function (ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
                 isMeasurementEnabled = !isMeasurementEnabled;
@@ -959,7 +992,7 @@ function initCharts() {
 
     // 初始化高频图
     chartHF = echarts.init(document.getElementById('chart-hf'), null, {
-        renderer: 'canvas' ,
+        renderer: 'canvas',
         useCoarsePointer: true,    // 直接挂载，5.4.0+
         pointerSize: 44           // 直接挂载，5.4.0+
     });
@@ -972,7 +1005,7 @@ function initCharts() {
 
 
     // 生成图例数据
-     // 生成图例数据（仅用于自定义图例）
+    // 生成图例数据（仅用于自定义图例）
     const hfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `HF Channel ${i + 1}`);
     const lfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `LF Channel ${i + 1}`);
 
@@ -1368,25 +1401,30 @@ function createCustomLegend(chart, chartType, colors, labels) {
             // 2. 更新当前图例项背景色
             item.style.background = newVisible ? colors[i] : '#aaa';
 
+            // 3. 更新箭头 dataset 和 zIndex
             const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
             if (arrowArray[i]) {
                 arrowArray[i].dataset.legendVisible = newVisible ? 'true' : 'false';
             }
+
+            // 调整箭头层级：当前通道箭头置顶（zIndex 2500），其余恢复默认（1999）
+            arrowArray.forEach((el, idx) => {
+                if (el) {
+                    el.style.zIndex = idx === i ? '2500' : '1999';
+                }
+            });
+
+            // 更新箭头显示状态（控制显示/隐藏）
             updateArrowPositions(chart, chartType);
 
-            // 3. 更新图表中对应 series 的数据
-
+            // 4. 更新图表中对应 series 的数据
             const seriesIndex = i;
-
             let newData;
             if (newVisible) {
-                // 显示：从全局数据缓存中恢复完整波形
                 newData = chartType === 'HF' ? dataBuffersHF[i].slice() : dataBuffersLF[i].slice();
             } else {
-                // 隐藏：设置为空数组
                 newData = [];
             }
-
             chart.setOption({
                 series: [{
                     index: seriesIndex,
