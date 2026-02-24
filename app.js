@@ -4,6 +4,10 @@ const POINTS_PER_CHANNEL = 2600; // 每个通道的点数
 const REFRESH_INTERVAL_MS = 100; // 刷新频率 (100ms = 10Hz)
 const VERTICAL_OFFSET_PER_CHANNEL = 0.8; // 每个通道的垂直偏移量
 
+// ========== 箭头固定屏幕位置（像素坐标，相对于图表容器）==========
+const arrowFixedTopHF = Array(NUM_CHANNELS).fill(0);
+const arrowFixedTopLF = Array(NUM_CHANNELS).fill(0);
+
 // ========== 通道显隐状态（true=显示，false=隐藏）==========
 const channelVisibleHF = Array(NUM_CHANNELS).fill(false).map((_, i) => i < 3);
 const channelVisibleLF = Array(NUM_CHANNELS).fill(false).map((_, i) => i < 3);
@@ -139,7 +143,7 @@ function generateNewPoint(x, channelIndex, baseFrequency, amplitudeScale, channe
 }
 
 /**
- * 生成全新的系列数据（每次调用都生成全新波形）
+ * 生成全新的系列数据（每次调用生成平滑的正弦波）
  * @param {number} channelIndex 通道索引
  * @param {number} baseFrequency 基础频率
  * @param {number} amplitudeScale 基础振幅
@@ -151,39 +155,25 @@ function generateNewSeriesData(channelIndex, baseFrequency, amplitudeScale, chan
     const chartType = channelStates === channelStatesHF ? 'HF' : 'LF';
     const verticalOffset = getVerticalOffset(channelIndex, chartType);
 
-    // 为每次生成创建新的随机种子
-    const frequency = baseFrequency * (0.8 + Math.random() * 0.4);
-    const amplitude = amplitudeScale * (0.7 + Math.random() * 0.6);
+    // 随机化频率和振幅，使每次刷新波形不同但保持平滑
+    const frequency = baseFrequency * (0.8 + Math.random() * 0.4); // 频率在80%-120%之间变化
+    const amplitude = amplitudeScale * (0.7 + Math.random() * 0.6); // 振幅在70%-130%之间变化
 
-    // 针对高频图的通道3-5（索引2-4）进行特殊调整
+    // 高频特殊通道（索引2-4）振幅加倍（与原逻辑一致）
     const isHighImpactHFChannel = (channelStates === channelStatesHF && channelIndex >= 2 && channelIndex <= 4);
     let finalAmplitude = amplitude;
     if (isHighImpactHFChannel) {
         finalAmplitude *= 2.0;
     }
 
-    // 生成全新的随机相位
+    // 随机初始相位
     const phase = Math.random() * Math.PI * 2;
 
     for (let i = 0; i < POINTS_PER_CHANNEL; i++) {
-        // 基础正弦波
+        // 纯正弦波，平滑无噪声
         let y = Math.sin(phase + i * frequency) * finalAmplitude;
 
-        // 添加谐波
-        y += Math.sin(phase * 1.3 + i * frequency * 2) * finalAmplitude * 0.3;
-        y += Math.sin(phase * 1.7 + i * frequency * 3) * finalAmplitude * 0.15;
-
-        // 添加随机噪声
-        y += (Math.random() - 0.5) * finalAmplitude * 0.3;
-
-        // 偶尔添加尖峰（高频特殊通道概率更高）
-        let spikeProb = 0.05;
-        if (isHighImpactHFChannel) spikeProb = 0.1;
-        if (Math.random() < spikeProb) {
-            y += (Math.random() > 0.5 ? 1 : -1) * finalAmplitude * 0.8;
-        }
-
-        // 限制范围
+        // 限制幅值（保留原限制逻辑）
         const maxValue = finalAmplitude * 1.5;
         if (y > maxValue) y = maxValue;
         if (y < -maxValue) y = -maxValue;
@@ -516,62 +506,29 @@ function applyChannelAdjust(channelIndex, chartType, newAdjust) {
         }
     }
 
-    // 更新箭头位置
-    updateArrowPositions(chart, chartType);
 }
 
 /**
- * 更新箭头 DOM 的位置（根据当前通道中心 y 值映射到像素）
+ * 更新箭头 DOM 的显示状态（基于 dataset.legendVisible），不改变位置
  */
 function updateArrowPositions(chart, chartType) {
     if (!chart) return;
-    const container = chart.getDom();
     const arrows = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
     for (let i = 0; i < arrows.length; i++) {
         const el = arrows[i];
         if (!el) continue;
-        const centerY = getVerticalOffset(i, chartType);
-        try {
-            const pixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, centerY]);
-            const top = pixel[1] - el.offsetHeight / 2;
-            // 计算绘图区像素范围，确保箭头只显示在绘图区内，避免覆盖图例
-            const opt = chart.getOption();
-            const yAxis = opt.yAxis && opt.yAxis[0] ? opt.yAxis[0] : {};
-            const yMin = (yAxis.min !== undefined) ? yAxis.min : -1e6;
-            const yMax = (yAxis.max !== undefined) ? yAxis.max : 1e6;
-            const topPixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, yMax])[1];
-            const bottomPixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, yMin])[1];
-            // 额外计算 grid.top（可能为百分比或数字），确保箭头不覆盖图例/标题区域
-            let gridTopPx = 0;
-            try {
-                const gridTop = (opt && opt.grid && opt.grid[0] && opt.grid[0].top !== undefined) ? opt.grid[0].top : 80;
-                const rect = container.getBoundingClientRect();
-                if (typeof gridTop === 'string' && gridTop.indexOf('%') !== -1) {
-                    gridTopPx = parseFloat(gridTop) / 100 * rect.height;
-                } else {
-                    gridTopPx = Number(gridTop);
-                }
-            } catch (e) {
-                gridTopPx = topPixel; // fallback
-            }
-            // 若图例已被隐藏，则保持隐藏；否则根据绘图区位置决定显示或隐藏
-            if (el.dataset && el.dataset.legendVisible === 'false') {
-                el.style.display = 'none';
-            } else if (top < Math.min(topPixel - 4, gridTopPx + 2) || top > bottomPixel + 4) {
-                el.style.display = 'none';
-            } else {
-                el.style.display = '';
-                el.style.top = `${top}px`;
-            }
-        } catch (err) {
+        if (el.dataset && el.dataset.legendVisible === 'false') {
             el.style.display = 'none';
+        } else {
+            el.style.display = '';
+            // 位置已在 createArrowControls 中由固定坐标管理，这里不再设置 top
         }
     }
 }
 
 /**
  * 箭头控件：左侧三角形（伪元素） + 右侧矩形（div本身）
- * 完全采用用户提供的 border 画三角方案，无任何多余嵌套
+ * 固定屏幕位置（缩放不动），拖拽时移动箭头并更新通道偏移量
  */
 function createArrowControls(chart, chartType) {
     if (!chart) return;
@@ -579,76 +536,103 @@ function createArrowControls(chart, chartType) {
     container.style.position = 'relative';
 
     const arrowsArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+    const fixedTopArray = chartType === 'HF' ? arrowFixedTopHF : arrowFixedTopLF;
     const colors = chartType === 'HF' ? channelColorsHF : channelColorsLF;
     const labels = chartType === 'HF' ? channelLabelsHF : channelLabelsLF;
 
-    // 统一箭头尺寸：矩形宽80px，高24px；三角形宽度12px（可自定义）
     const RECT_WIDTH = 58;
     const RECT_HEIGHT = 24;
-    const TRIANGLE_WIDTH = 12;   // 三角形底边宽度，同时也是 left 负偏移量
+    const TRIANGLE_WIDTH = 12;
 
+    // 计算初始固定位置（按通道索引均匀分布，留出边距）
+    function computeFixedPositions() {
+        const containerHeight = container.clientHeight;
+        for (let i = 0; i < NUM_CHANNELS; i++) {
+            const baseY = getVerticalOffset(i, chartType); // 数据Y值（基线）
+            try {
+                // 将数据坐标 (0, baseY) 转换为屏幕像素坐标
+                const pixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, baseY]);
+                // 箭头中心与基线对齐，因此 top = pixel[1] - 箭头高度的一半
+                fixedTopArray[i] = pixel[1] - RECT_HEIGHT / 2;
+                // 限制在容器范围内，防止箭头溢出
+                const minY = 0;
+                const maxY = containerHeight - RECT_HEIGHT;
+                fixedTopArray[i] = Math.max(minY, Math.min(maxY, fixedTopArray[i]));
+            } catch (e) {
+                // 转换失败时使用均匀分布作为后备（通常不会发生）
+                const margin = 20;
+                const startY = margin;
+                const endY = containerHeight - margin;
+                const step = NUM_CHANNELS > 1 ? (endY - startY) / (NUM_CHANNELS - 1) : 0;
+                fixedTopArray[i] = startY + i * step;
+            }
+        }
+    }
+
+    computeFixedPositions();
+
+    // 应用固定位置到所有箭头
+    function applyFixedPositions() {
+        arrowsArray.forEach((el, i) => {
+            if (el && el.dataset.legendVisible !== 'false') {
+                el.style.top = fixedTopArray[i] + 'px';
+            }
+        });
+    }
+
+    // 创建箭头元素
     for (let i = 0; i < NUM_CHANNELS; i++) {
-        // ----- 主容器：右侧矩形（背景色、文字）-----
         const el = document.createElement('div');
         el.className = 'channel-arrow';
         el.style.position = 'absolute';
-        el.style.right = '6px';                // 距离右侧边缘
+        el.style.right = '6px';
         el.style.width = RECT_WIDTH + 'px';
         el.style.height = RECT_HEIGHT + 'px';
         el.style.lineHeight = RECT_HEIGHT + 'px';
-        el.style.textAlign = 'center';         // 文字水平居中
-        el.style.background = colors[i];       // 矩形背景色
+        el.style.textAlign = 'center';
+        el.style.background = colors[i];
         el.style.color = '#fff';
         el.style.fontSize = '12px';
         el.style.fontWeight = '500';
         el.style.whiteSpace = 'nowrap';
         el.style.overflow = 'visible';
-        // el.style.position = 'relative';   // 必须
         el.style.textOverflow = 'ellipsis';
-        // el.style.pointerEvents = 'none';   // 箭头完全不响应鼠标，点击完全穿透到图表
         el.style.cursor = 'pointer';
         el.style.userSelect = 'none';
         el.style.zIndex = '1999';
-        el.style.display = 'none';             // 初始隐藏，定位后显示
+        el.style.display = 'none'; // 初始隐藏，定位后显示
 
-
-        // ----- 直接设置文字内容（居中显示）-----
         el.textContent = labels[i];
-
-        // ----- 存储 data 属性 -----
         el.dataset.channelIndex = String(i);
         el.dataset.legendVisible = 'true';
 
         container.appendChild(el);
         arrowsArray.push(el);
 
-        // ----- 为每个箭头生成唯一的 class，用于定义伪元素三角形 -----
+        // 添加伪元素三角形样式（沿用原有逻辑）
         const arrowClass = `channel-arrow-${chartType}-${i}`;
         el.classList.add(arrowClass);
-
-        // ----- 动态插入 CSS 规则：完全按照您的 border 画三角方法 -----
         const style = document.createElement('style');
         style.textContent = `
             .${arrowClass} {
-                position: relative;  /* 为伪元素提供定位基准 */
+                position: relative;
             }
             .${arrowClass}::before {
                 content: '';
                 position: absolute;
-                left: -${TRIANGLE_WIDTH}px;     /* 负值将三角形定位到矩形左侧外部 */
+                left: -${TRIANGLE_WIDTH}px;
                 top: 0;
                 width: 0;
                 height: 0;
                 border-style: solid;
-                /* border-width: 上 右 下 左 */
                 border-width: ${RECT_HEIGHT/2}px ${TRIANGLE_WIDTH}px ${RECT_HEIGHT/2}px 0;
                 border-color: transparent ${colors[i]} transparent transparent;
-                pointer-events: none;  /* 确保点击穿透，拖拽时鼠标可点击矩形区域 */
+                pointer-events: none;
             }
         `;
         document.head.appendChild(style);
 
-        // --- 拖拽逻辑（完全保留，无需任何修改）---
+        // --- 拖拽逻辑：基于固定坐标更新 ---
         let dragging = false;
         let moved = false;
         const onMouseDown = (ev) => {
@@ -664,22 +648,28 @@ function createArrowControls(chart, chartType) {
             if (!dragging) return;
             moved = true;
             const rect = container.getBoundingClientRect();
-            const offsetX = ev.clientX - rect.left;
-            const offsetY = ev.clientY - rect.top;
-            let dataPos;
+            const offsetY = ev.clientY - rect.top; // 鼠标相对于容器的 Y 坐标
+
+            // 限制在容器范围内
+            const minY = 0;
+            const maxY = container.clientHeight - el.offsetHeight;
+            const newTop = Math.max(minY, Math.min(maxY, offsetY - el.offsetHeight / 2));
+
+            // 更新固定坐标数组
+            fixedTopArray[i] = newTop;
+            // 立即移动箭头
+            el.style.top = newTop + 'px';
+
+            // 计算新中心对应的数据 Y 值
             try {
-                dataPos = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [offsetX, offsetY]);
+                const dataPos = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, newTop + el.offsetHeight / 2]);
+                const newCenter = dataPos[1];
+                const base = BASE_VERTICAL_OFFSET + i * VERTICAL_OFFSET_PER_CHANNEL;
+                const newAdjust = newCenter - base;
+                applyChannelAdjust(i, chartType, newAdjust);
             } catch (err) {
-                return;
+                // 忽略转换错误
             }
-            const newCenter = dataPos[1];
-            const opt = chart.getOption();
-            let yMin = opt.yAxis?.[0]?.min ?? -Infinity;
-            let yMax = opt.yAxis?.[0]?.max ?? Infinity;
-            const clamped = Math.max(yMin, Math.min(yMax, newCenter));
-            const base = BASE_VERTICAL_OFFSET + i * VERTICAL_OFFSET_PER_CHANNEL;
-            const newAdjust = clamped - base;
-            applyChannelAdjust(i, chartType, newAdjust);
         };
         const onMouseUp = (ev) => {
             dragging = false;
@@ -687,6 +677,7 @@ function createArrowControls(chart, chartType) {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
             if (!moved) {
+                // 点击未拖动：选中通道
                 const id = `${chartType}_${i + 1}`;
                 currentSelectedChannelId = id;
                 channelSelect.value = id;
@@ -699,7 +690,7 @@ function createArrowControls(chart, chartType) {
         el.addEventListener('mousedown', onMouseDown);
         el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
-        // --- 双击编辑：直接修改 el.textContent ---
+        // 双击编辑
         el.addEventListener('dblclick', (ev) => {
             ev.stopPropagation();
             const current = el.textContent || '';
@@ -712,9 +703,19 @@ function createArrowControls(chart, chartType) {
         });
     }
 
-    // 渲染完成时更新箭头位置
-    chart.on?.('finished', () => updateArrowPositions(chart, chartType));
-    window.addEventListener('resize', () => updateArrowPositions(chart, chartType));
+    // 应用初始固定位置
+    applyFixedPositions();
+
+    // 监听 dataZoom 事件：缩放后重新应用固定位置（确保箭头不动）
+    chart.on('datazoom', function() {
+        applyFixedPositions();
+    });
+
+    // 窗口大小变化时重新计算固定位置
+    window.addEventListener('resize', () => {
+        computeFixedPositions();
+        applyFixedPositions();
+    });
 }
 
 /**
@@ -876,8 +877,56 @@ function initControls() {
     // 添加事件监听器
     chSelect.addEventListener('change', (event) => {
         currentSelectedChannelId = event.target.value;
+        const [chartType, channelNumStr] = currentSelectedChannelId.split('_');
+        const channelIndex = parseInt(channelNumStr) - 1;
+
+        // 获取对应的显隐状态数组、箭头数组和数据缓存
+        const visibleArray = chartType === 'HF' ? channelVisibleHF : channelVisibleLF;
+        const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+        const buffers = chartType === 'HF' ? dataBuffersHF : dataBuffersLF;
+        const chart = chartType === 'HF' ? chartHF : chartLF;
+
+        // 如果当前通道是隐藏的，则显示它
+        if (!visibleArray[channelIndex]) {
+            // 更新显隐状态
+            visibleArray[channelIndex] = true;
+
+            // 更新对应箭头的 dataset（使其显示）
+            if (arrowArray[channelIndex]) {
+                arrowArray[channelIndex].dataset.legendVisible = 'true';
+            }
+
+            // 更新图表中对应 series 的数据（恢复为完整波形）
+            if (chart) {
+                const newData = buffers[channelIndex].slice(); // 使用最新缓存数据
+                chart.setOption({
+                    series: [{
+                        index: channelIndex,
+                        data: newData
+                    }]
+                }, false);
+            }
+        }
+
+        // 更新量程下拉框的值
         rgSelect.value = channelRanges.get(currentSelectedChannelId);
+
+        // 应用量程（这会调整Y轴范围，并可能裁剪箭头偏移）
         applyRangeToChart();
+
+        // 调整箭头层级：当前通道箭头置顶，其余恢复默认
+        if (arrowArray.length > 0) {
+            arrowArray.forEach((el, idx) => {
+                if (el) {
+                    el.style.zIndex = idx === channelIndex ? '2500' : '1999';
+                }
+            });
+        }
+
+        // 最后更新箭头位置（确保显示/隐藏和层级变化生效）
+        if (chart) {
+            updateArrowPositions(chart, chartType);
+        }
     });
 
     rgSelect.addEventListener('change', (event) => {
@@ -941,7 +990,7 @@ function initCharts() {
             // inverse: true, // 关键：反转X轴，使最新数据在左侧
             min: 0, // 固定显示窗口的最小索引
             max: POINTS_PER_CHANNEL - 1, // 固定显示窗口的最大索引
-            splitLine: { show: false }, // 不显示X轴网格线
+            splitLine: { show: true }, // 不显示X轴网格线
             axisTick: { show: true },
             axisLine: { show: true },
             axisLabel: {
@@ -955,11 +1004,11 @@ function initCharts() {
                     return clamped.toFixed(2) + ' µs';
                 }
             },
-            splitNumber: 3 // 产生 4 个刻度：0,0.5,1.0,1.5
+            splitNumber: 7 // 产生 4 个刻度：0,0.5,1.0,1.5
         },
         yAxis: {
             type: 'value',
-            splitLine: { show: false }, // 不显示Y轴网格线
+            splitLine: { show: true }, // 不显示Y轴网格线
             axisTick: { show: true },
             axisLine: { show: true },
             axisLabel: {
