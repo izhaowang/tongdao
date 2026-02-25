@@ -4,6 +4,13 @@ const POINTS_PER_CHANNEL = 2600; // 每个通道的点数
 const REFRESH_INTERVAL_MS = 100; // 刷新频率 (100ms = 10Hz)
 const VERTICAL_OFFSET_PER_CHANNEL = 0; // 每个通道的垂直偏移量
 
+// ========== 通道增益（与量程对应，基准量程5V增益=1）==========
+const channelGainHF = Array(NUM_CHANNELS).fill(1.0);
+const channelGainLF = Array(NUM_CHANNELS).fill(1.0);
+
+const rawDataBuffersHF = Array(NUM_CHANNELS).fill(0).map(() => []);
+const rawDataBuffersLF = Array(NUM_CHANNELS).fill(0).map(() => []);
+
 // ========== 箭头固定屏幕位置（像素坐标，相对于图表容器）==========
 const arrowFixedTopHF = Array(NUM_CHANNELS).fill(0);
 const arrowFixedTopLF = Array(NUM_CHANNELS).fill(0);
@@ -153,8 +160,10 @@ function generateNewPoint(x, channelIndex, baseFrequency, amplitudeScale, channe
 function generateNewSeriesData(channelIndex, baseFrequency, amplitudeScale, channelStates) {
     const data = [];
     const chartType = channelStates === channelStatesHF ? 'HF' : 'LF';
-    // 获取当前通道的偏移量
+    // 获取当前通道的偏移量（拖拽产生的垂直位移）
     const adjust = chartType === 'HF' ? channelAdjustHF[channelIndex] : channelAdjustLF[channelIndex];
+    // 获取当前通道的增益（由量程决定）
+    const gain = chartType === 'HF' ? channelGainHF[channelIndex] : channelGainLF[channelIndex];
 
     // 随机化频率和振幅，使每次刷新波形不同但保持平滑
     const frequency = baseFrequency * (0.8 + Math.random() * 0.4); // 频率在80%-120%之间变化
@@ -171,15 +180,14 @@ function generateNewSeriesData(channelIndex, baseFrequency, amplitudeScale, chan
     const phase = Math.random() * Math.PI * 2;
 
     for (let i = 0; i < POINTS_PER_CHANNEL; i++) {
-        // 纯正弦波，平滑无噪声
-        let y = Math.sin(phase + i * frequency) * finalAmplitude;
+        // 纯正弦波，乘以增益，然后加上偏移量
+        let y = Math.sin(phase + i * frequency) * finalAmplitude * gain;
 
         // 限制幅值（保留原限制逻辑）
-        const maxValue = finalAmplitude * 1.5;
+        const maxValue = finalAmplitude * 1.5 * gain;
         if (y > maxValue) y = maxValue;
         if (y < -maxValue) y = -maxValue;
 
-        // 加上当前通道的偏移量
         data.push([i, y + adjust]);
     }
 
@@ -248,9 +256,8 @@ function generateInitialSeriesData(channelIndex, baseFrequency, amplitudeScale, 
 }
 
 /**
- * 根据当前选中的通道和量程，更新对应图表的Y轴范围及单位
- * - Y轴范围固定为 ±量程
- * - 轴标签和轴名称自动匹配单位（V 或 mV）
+ * 根据当前选中的通道和量程，更新该通道的增益并刷新波形
+ * 不再修改 Y 轴范围，Y 轴固定为 ±5V
  */
 function applyRangeToChart() {
     if (!currentSelectedChannelId) return;
@@ -259,7 +266,6 @@ function applyRangeToChart() {
     const channelIndex = parseInt(channelNumStr) - 1;
 
     const selectedRangeString = channelRanges.get(currentSelectedChannelId);
-    // 解析量程字符串，例如 "5V", "100mv"
     const match = selectedRangeString.match(/^(\d+(?:\.\d+)?)(mv|V)$/i);
     if (!match) {
         console.warn(`无法解析量程字符串: ${selectedRangeString}`);
@@ -274,56 +280,84 @@ function applyRangeToChart() {
         rangeValue = value / 1000;
     }
 
-    // Y轴范围固定为 ±量程
-    const yMin = -rangeValue;
-    const yMax = rangeValue;
+    // 计算增益：基准量程5V，增益 = 5 / rangeValue
+    const gain = 5 / rangeValue;
 
-    // 根据单位设置轴标签格式化和轴名称
+    // 更新对应通道的增益数组
+    if (chartType === 'HF') {
+        channelGainHF[channelIndex] = gain;
+    } else {
+        channelGainLF[channelIndex] = gain;
+    }
+
+    const chartToUpdate = chartType === 'HF' ? chartHF : chartLF;
+    if (!chartToUpdate) return;
+
+    // 为目标通道重新生成数据（使用更新后的增益）
+    const newData = generateNewSeriesData(
+        channelIndex,
+        chartType === 'HF' ? 0.05 : 0.01,
+        chartType === 'HF' ? 1.0 : 0.5,
+        chartType === 'HF' ? channelStatesHF : channelStatesLF
+    );
+
+    // 更新数据缓存
+    if (chartType === 'HF') {
+        dataBuffersHF[channelIndex] = newData.slice();
+    } else {
+        dataBuffersLF[channelIndex] = newData.slice();
+    }
+
+    // 更新图表中对应 series 的数据
+    chartToUpdate.setOption({
+        series: [{
+            index: channelIndex,
+            data: newData
+        }]
+    }, false);
+
+    // 根据单位设置轴标签格式化和轴名称（Y轴范围保持 ±5V）
     let axisLabelFormatter, axisName;
     if (unit === 'v') {
+        // 显示因子：实际值（伏特）乘以 (rangeValue / 5) 得到对应量程的显示值
+        const displayFactor = rangeValue / 5;
         axisLabelFormatter = function (val) {
-            return val.toFixed(2);
+            return (val * displayFactor).toFixed(2) + ' V';
         };
         axisName = 'V';
     } else { // mv
+        const displayFactor = rangeValue / 5; // rangeValue已是伏特
         axisLabelFormatter = function (val) {
-            return (val * 1000).toFixed(1);
+            // val 是伏特，先转为毫伏再乘因子
+            return (val * 1000 * displayFactor).toFixed(1) + ' mV';
         };
         axisName = 'mV';
     }
 
-    const chartToUpdate = chartType === 'HF' ? chartHF : chartLF;
-    if (chartToUpdate) {
-        chartToUpdate.setOption({
-            yAxis: {
-                min: yMin,
-                max: yMax,
-                axisLabel: {
-                    formatter: axisLabelFormatter
-                },
-                name: axisName
+    // 更新Y轴标签格式化，保持轴范围不变（±5V）
+    chartToUpdate.setOption({
+        yAxis: {
+            axisLabel: {
+                formatter: axisLabelFormatter
             },
-            // 重置 dataZoom 的 Y 轴状态，确保量程下拉框的优先级
-            dataZoom: [{
-                yAxisIndex: 0,
-                start: 0,
-                end: 100
-            }]
-        });
+            name: axisName
+        }
+    }, false);
 
-        // 确保所有通道的中心线在当前 y 轴范围内，若不在则自动裁剪箭头偏移
-        const baseClamp = (idx) => BASE_VERTICAL_OFFSET + idx * VERTICAL_OFFSET_PER_CHANNEL;
-        const arrowsArray = chartType === 'HF' ? channelAdjustHF : channelAdjustLF;
-        for (let i = 0; i < NUM_CHANNELS; i++) {
-            const base = baseClamp(i);
-            const curAdjust = arrowsArray[i] || 0;
-            const curCenter = base + curAdjust;
-            let newAdjust = curAdjust;
-            if (curCenter < yMin) newAdjust = yMin - base + 0.001;
-            if (curCenter > yMax) newAdjust = yMax - base - 0.001;
-            if (Math.abs(newAdjust - curAdjust) > 1e-9) {
-                applyChannelAdjust(i, chartType, newAdjust);
-            }
+    // 确保所有通道的中心线在当前 y 轴范围内（Y轴固定±5V）
+    const yMin = -5;
+    const yMax = 5;
+    const baseClamp = (idx) => BASE_VERTICAL_OFFSET + idx * VERTICAL_OFFSET_PER_CHANNEL;
+    const arrowsArray = chartType === 'HF' ? channelAdjustHF : channelAdjustLF;
+    for (let i = 0; i < NUM_CHANNELS; i++) {
+        const base = baseClamp(i);
+        const curAdjust = arrowsArray[i] || 0;
+        const curCenter = base + curAdjust;
+        let newAdjust = curAdjust;
+        if (curCenter < yMin) newAdjust = yMin - base + 0.001;
+        if (curCenter > yMax) newAdjust = yMax - base - 0.001;
+        if (Math.abs(newAdjust - curAdjust) > 1e-9) {
+            applyChannelAdjust(i, chartType, newAdjust);
         }
     }
 }
@@ -1178,6 +1212,8 @@ function initCharts() {
         },
         yAxis: {
             type: 'value',
+             min: -5,                // 固定为 -5V
+    max: 5,                 // 固定为 5V
             splitLine: { show: true }, // 不显示Y轴网格线
             axisTick: { show: true },
             axisLine: { show: true },
@@ -1250,8 +1286,8 @@ function initCharts() {
     // 初始Y轴范围应覆盖所有通道的中心线，并加上默认量程的半跨度
     const defaultYMinHF = getVerticalOffset(0, 'HF') - defaultRangeConfig.span / 2;
     const defaultYMaxHF = getVerticalOffset(NUM_CHANNELS - 1, 'HF') + defaultRangeConfig.span / 2;
-    hfOption.yAxis.min = defaultYMinHF;
-    hfOption.yAxis.max = defaultYMaxHF;
+    // hfOption.yAxis.min = defaultYMinHF;
+    // hfOption.yAxis.max = defaultYMaxHF;
     hfOption.legend = { show: false };
     // 1--
     // 设置高频图的图例数据，并仅默认显示前 3 条通道
