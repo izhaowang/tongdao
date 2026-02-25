@@ -54,7 +54,7 @@ window.channelLabels = { HF: channelLabelsHF, LF: channelLabelsLF };
 
 // --- 新增：量程和通道管理 ---
 const channelSelect = document.getElementById('channel-select');
-const rangeSelect = document.getElementById('range-select');
+const rgSelect = document.getElementById('range-select');
 
 // 存储每个通道的量程设置 (channelId -> rangeString)
 const channelRanges = new Map();
@@ -537,6 +537,8 @@ function createArrowControls(chart, chartType) {
     const container = chart.getDom();
     container.style.position = 'relative';
 
+
+
     const arrowsArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
     const fixedTopArray = chartType === 'HF' ? arrowFixedTopHF : arrowFixedTopLF;
     const colors = chartType === 'HF' ? channelColorsHF : channelColorsLF;
@@ -549,8 +551,11 @@ function createArrowControls(chart, chartType) {
     // 计算初始固定位置（按通道索引均匀分布，留出边距）
     function computeFixedPositions() {
         const containerHeight = container.clientHeight;
-        // 所有箭头都放在容器垂直居中位置
-        const fixedTop = (containerHeight - RECT_HEIGHT) / 2;
+        // 在垂直居中位置基础上增加偏移量（例如 50px），使其更靠近底部
+        const offset = 25; // 可根据需要调整此值
+        let fixedTop = (containerHeight - RECT_HEIGHT) / 2 + offset;
+        // 确保不超出容器范围
+        fixedTop = Math.max(0, Math.min(containerHeight - RECT_HEIGHT, fixedTop));
         for (let i = 0; i < NUM_CHANNELS; i++) {
             fixedTopArray[i] = fixedTop;
         }
@@ -620,11 +625,33 @@ function createArrowControls(chart, chartType) {
         document.head.appendChild(style);
 
         // --- 拖拽逻辑：基于固定坐标更新 ---
+
+
         let dragging = false;
         let moved = false;
+        let dragStartY = 0; // 记录鼠标按下时的起始Y坐标
+        // const onMouseDown = (ev) => {
+        //     ev.preventDefault();
+        //     ev.stopPropagation();
+        //     const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+        //     arrowArray.forEach((el, idx) => {
+        //         if (el) {
+        //             el.style.zIndex = idx === i ? '2500' : '1999';
+        //         }
+        //     });
+
+        //     // ========== 只做拖拽初始化 ==========
+        //     el.style.cursor = 'ns-resize';
+        //     dragging = true;
+        //     moved = false;
+        //     document.addEventListener('mousemove', onMouseMove);
+        //     document.addEventListener('mouseup', onMouseUp);
+        // };
         const onMouseDown = (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
+
+            // 提升当前箭头层级
             const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
             arrowArray.forEach((el, idx) => {
                 if (el) {
@@ -632,30 +659,72 @@ function createArrowControls(chart, chartType) {
                 }
             });
 
-            // ========== 只做拖拽初始化 ==========
+            // 记录起始位置
+            const rect = container.getBoundingClientRect();
+            dragStartY = ev.clientY - rect.top;
+
+            // 拖拽初始化
             el.style.cursor = 'ns-resize';
             dragging = true;
             moved = false;
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
         };
+
+        // const onMouseMove = (ev) => {
+        //     if (!dragging) return;
+        //     moved = true;
+        //     const rect = container.getBoundingClientRect();
+        //     const offsetY = ev.clientY - rect.top; // 鼠标相对于容器的 Y 坐标
+
+        //     // 限制在容器范围内
+        //     const minY = 0;
+        //     const maxY = container.clientHeight - el.offsetHeight;
+        //     const newTop = Math.max(minY, Math.min(maxY, offsetY - el.offsetHeight / 2));
+
+        //     // 更新固定坐标数组
+        //     fixedTopArray[i] = newTop;
+        //     // 立即移动箭头
+        //     el.style.top = newTop + 'px';
+
+        //     // 计算新中心对应的数据 Y 值
+        //     try {
+        //         const dataPos = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, newTop + el.offsetHeight / 2]);
+        //         const newCenter = dataPos[1];
+        //         const base = BASE_VERTICAL_OFFSET + i * VERTICAL_OFFSET_PER_CHANNEL;
+        //         const newAdjust = newCenter - base;
+        //         applyChannelAdjust(i, chartType, newAdjust);
+        //     } catch (err) {
+        //         // 忽略转换错误
+        //     }
+        // };
         const onMouseMove = (ev) => {
             if (!dragging) return;
-            moved = true;
-            const rect = container.getBoundingClientRect();
-            const offsetY = ev.clientY - rect.top; // 鼠标相对于容器的 Y 坐标
 
-            // 限制在容器范围内
+            const rect = container.getBoundingClientRect();
+            const currentY = ev.clientY - rect.top;
+
+            // 判断移动距离是否超过阈值（3像素）
+            if (Math.abs(currentY - dragStartY) > 3) {
+                // 如果是第一次超过阈值（即刚进入拖拽状态），执行通道切换
+                if (!moved) {
+                    const id = `${chartType}_${i + 1}`;
+                    currentSelectedChannelId = id;
+                    channelSelect.value = id;
+                    rgSelect.value = channelRanges.get(id);
+                    applyRangeToChart(); // 应用该通道的量程
+                }
+                moved = true;
+            }
+
+            // 实时更新箭头位置（无论是否超过阈值，都跟随移动）
             const minY = 0;
             const maxY = container.clientHeight - el.offsetHeight;
-            const newTop = Math.max(minY, Math.min(maxY, offsetY - el.offsetHeight / 2));
-
-            // 更新固定坐标数组
+            const newTop = Math.max(minY, Math.min(maxY, currentY - el.offsetHeight / 2));
             fixedTopArray[i] = newTop;
-            // 立即移动箭头
             el.style.top = newTop + 'px';
 
-            // 计算新中心对应的数据 Y 值
+            // 计算并应用通道偏移
             try {
                 const dataPos = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, newTop + el.offsetHeight / 2]);
                 const newCenter = dataPos[1];
@@ -666,17 +735,15 @@ function createArrowControls(chart, chartType) {
                 // 忽略转换错误
             }
         };
-
         const onMouseUp = (ev) => {
             dragging = false;
             el.style.cursor = 'pointer';
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
-
-            // 如果发生了移动（即拖拽），就不做通道切换；如果只是点击，就做通道切换
+            // 如果未发生有效移动（即点击），执行通道切换和量程应用
             if (!moved) {
-                // ========== 执行通道切换和量程应用 ==========
                 const id = `${chartType}_${i + 1}`;
+
                 currentSelectedChannelId = id;
                 channelSelect.value = id;
                 rgSelect.value = channelRanges.get(id);
@@ -703,7 +770,7 @@ function createArrowControls(chart, chartType) {
                     }
                 }
 
-                // 调整箭头层级：当前通道箭头置顶，其余恢复默认
+                // 调整箭头层级
                 arrowArray.forEach((el, idx) => {
                     if (el) {
                         el.style.zIndex = idx === i ? '2500' : '1999';
@@ -719,6 +786,59 @@ function createArrowControls(chart, chartType) {
                 applyRangeToChart();
             }
         };
+
+        // const onMouseUp = (ev) => {
+        //     dragging = false;
+        //     el.style.cursor = 'pointer';
+        //     document.removeEventListener('mousemove', onMouseMove);
+        //     document.removeEventListener('mouseup', onMouseUp);
+
+        //     // 如果发生了移动（即拖拽），就不做通道切换；如果只是点击，就做通道切换
+        //     if (!moved) {
+        //         // ========== 执行通道切换和量程应用 ==========
+        //         const id = `${chartType}_${i + 1}`;
+        //         currentSelectedChannelId = id;
+        //         channelSelect.value = id;
+        //         rgSelect.value = channelRanges.get(id);
+
+        //         const visibleArray = chartType === 'HF' ? channelVisibleHF : channelVisibleLF;
+        //         const buffers = chartType === 'HF' ? dataBuffersHF : dataBuffersLF;
+        //         const chart = chartType === 'HF' ? chartHF : chartLF;
+        //         const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
+
+        //         // 如果当前通道是隐藏的，则显示它
+        //         if (!visibleArray[i]) {
+        //             visibleArray[i] = true;
+        //             if (arrowArray[i]) {
+        //                 arrowArray[i].dataset.legendVisible = 'true';
+        //             }
+        //             if (chart) {
+        //                 const newData = buffers[i].slice();
+        //                 chart.setOption({
+        //                     series: [{
+        //                         index: i,
+        //                         data: newData
+        //                     }]
+        //                 }, false);
+        //             }
+        //         }
+
+        //         // 调整箭头层级：当前通道箭头置顶，其余恢复默认
+        //         arrowArray.forEach((el, idx) => {
+        //             if (el) {
+        //                 el.style.zIndex = idx === i ? '2500' : '1999';
+        //             }
+        //         });
+
+        //         // 更新箭头显示状态
+        //         if (chart) {
+        //             updateArrowPositions(chart, chartType);
+        //         }
+
+        //         // 应用量程
+        //         applyRangeToChart();
+        //     }
+        // };
 
         el.addEventListener('mousedown', onMouseDown);
         el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
@@ -1023,9 +1143,26 @@ function initCharts() {
             // inverse: true, // 关键：反转X轴，使最新数据在左侧
             min: 0, // 固定显示窗口的最小索引
             max: POINTS_PER_CHANNEL - 1, // 固定显示窗口的最大索引
-            splitLine: { show: true }, // 不显示X轴网格线
-            axisTick: { show: true },
-            axisLine: { show: true },
+            splitLine: {
+                show: true,
+                lineStyle: {
+                    color: '#ccc',      // 网格线颜色
+                    width: 1,
+                    type: 'solid'
+                }
+            },
+            axisTick: {
+                show: true,
+                lineStyle: {
+                    color: '#ccc'       // 刻度线颜色与网格线一致
+                }
+            },
+            axisLine: {
+                show: true,
+                lineStyle: {
+                    color: '#ccc'       // 轴线颜色与网格线一致
+                }
+            },
             axisLabel: {
                 show: true,
                 // 将当前数值坐标（样本索引）映射为时间（µs）显示，固定映射 0..POINTS_PER_CHANNEL-1 -> 0..1.5 µs
