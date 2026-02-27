@@ -8,6 +8,8 @@ const VERTICAL_OFFSET_PER_CHANNEL = 0; // 每个通道的垂直偏移量
 const channelGainHF = Array(NUM_CHANNELS).fill(1.0);
 const channelGainLF = Array(NUM_CHANNELS).fill(1.0);
 
+
+
 const rawDataBuffersHF = Array(NUM_CHANNELS).fill(0).map(() => []);
 const rawDataBuffersLF = Array(NUM_CHANNELS).fill(0).map(() => []);
 
@@ -20,6 +22,10 @@ const channelVisibleHF = Array(NUM_CHANNELS).fill(false).map((_, i) => i < 3);
 const channelVisibleLF = Array(NUM_CHANNELS).fill(false).map((_, i) => i < 3);
 // 测量开关（true = 允许绘制测量线，false = 禁止）
 let isMeasurementEnabled = false;
+
+// 保存初始 dataZoom 状态，用于复位缩放
+let initialDataZoomHF = null;
+let initialDataZoomLF = null;
 // ECharts 实例
 let chartHF = null;
 let chartLF = null;
@@ -340,7 +346,7 @@ function applyRangeToChart() {
             axisLabel: {
                 formatter: axisLabelFormatter
             },
-            name: axisName
+            name: ''
         }
     }, false);
 
@@ -669,7 +675,7 @@ function createArrowControls(chart, chartType) {
             ev.preventDefault();
             ev.stopPropagation();
 
-           updateYAxisColor(chart, colors[i]); // colors[i] 即为当前通道颜色
+            updateYAxisColor(chart, colors[i]); // colors[i] 即为当前通道颜色
             // 提升当前箭头层级
             const arrowArray = chartType === 'HF' ? arrowElemsHF : arrowElemsLF;
             arrowArray.forEach((el, idx) => {
@@ -943,12 +949,27 @@ window.getMeasurements = function (chartType) {
 /**
  * 清除两张图的所有测量线并更新显示
  */
+/**
+ * 清除两张图的所有测量线并复位缩放
+ */
 function clearAllMeasurements() {
+    // 清除测量线
     measurementLinesHF.length = 0;
     measurementLinesLF.length = 0;
     if (chartHF) deleteMeasurementLinesOnChart(chartHF, measurementLinesHF);
     if (chartLF) deleteMeasurementLinesOnChart(chartLF, measurementLinesLF);
-    console.log('All measurement lines cleared.');
+
+    // 复位高频图缩放（直接使用初始 dataZoom 配置）
+    if (chartHF && initialDataZoomHF) {
+        chartHF.setOption({ dataZoom: initialDataZoomHF }, false);
+    }
+
+    // 复位低频图缩放
+    if (chartLF && initialDataZoomLF) {
+        chartLF.setOption({ dataZoom: initialDataZoomLF }, false);
+    }
+
+    console.log('所有测量线已清除，缩放已复位。');
 }
 
 // 暴露接口
@@ -1137,8 +1158,8 @@ function initCharts() {
         xAxis: {
             type: 'value',
             // inverse: true, // 关键：反转X轴，使最新数据在左侧
-            // min: 0, // 固定显示窗口的最小索引
-            // max: POINTS_PER_CHANNEL - 1, // 固定显示窗口的最大索引
+            min: -10000,                         // 左边扩大范围
+            max: POINTS_PER_CHANNEL + 10000,      // 右边扩大范围
             splitLine: {
                 show: true,
                 lineStyle: {
@@ -1177,16 +1198,18 @@ function initCharts() {
             min: -5,                // 固定为 -5V
             max: 5,                 // 固定为 5V
             splitLine: { show: true }, // 不显示Y轴网格线
-            axisTick: { show: true },
-            axisLine: { show: true },
+            axisTick: { show: false },
+            axisLine: { show: false },
             axisLabel: {
                 show: true,
                 formatter: function (val) {
                     // 将 Y 值（单位为 V）转换为 mV 并显示
-                    return (val * 1000).toFixed(1) + ' mV';
+                    return (val * 1000) + ' mV';
                 }
             },
-            name: 'mV'
+            name: '',
+            nameLocation: 'middle',     // 单位放在轴的最大值位置（顶部）
+            // nameGap: 50
         },
         // 添加图例配置
         legend: {
@@ -1204,14 +1227,16 @@ function initCharts() {
         // **新增：dataZoom 配置**
         dataZoom: [
             {
-        type: 'inside', // 内置型数据区域缩放
-        xAxisIndex: 0, // 作用于第一个X轴
-        zoomOnMouseWheel: true, // 鼠标滚轮缩放X轴
-        moveOnMouseMove: true, // 鼠标移动平移X轴
-        moveOnMouseWheel: false, // 鼠标滚轮不平移X轴
-        preventDefaultMouseMove: false,
-        filterMode: 'filter' // 过滤数据，只显示在范围内的数据
-    },
+                type: 'inside', // 内置型数据区域缩放
+                xAxisIndex: 0, // 作用于第一个X轴
+                zoomOnMouseWheel: true, // 鼠标滚轮缩放X轴
+                moveOnMouseMove: true, // 鼠标移动平移X轴
+                moveOnMouseWheel: false, // 鼠标滚轮不平移X轴
+                preventDefaultMouseMove: false,
+                filterMode: 'filter', // 过滤数据，只显示在范围内的数据
+                start: 44.5,          // 新增
+                end: 55.5             // 新增
+            },
             {
                 type: 'inside', // 内置型数据区域缩放
                 yAxisIndex: 0, // 作用于第一个Y轴
@@ -1232,17 +1257,10 @@ function initCharts() {
         const totalSamples = POINTS_PER_CHANNEL - 1; // 2599
         const usPerSample = 20 / totalSamples;       // 每个采样点对应微秒数
         const us = val * usPerSample;
-        const clamped = Math.max(0, Math.min(20, us));
-        return clamped.toFixed(2) + ' µs';
+        // const clamped = Math.max(0, Math.min(20, us));
+        return us.toFixed(2) + ' µs';
     };
-    // hfOption.title = {
-    //     text: '高频波形图',
-    //     left: 'center',
-    //     textStyle: {
-    //         color: '#333',
-    //         fontSize: 16
-    //     }
-    // };
+
     // 初始Y轴范围，使用一个足够大的默认量程，例如5V，确保所有通道都能大致显示
     const defaultRangeConfig = rangeToYAxisMap.get('5V');
     // 初始Y轴范围应覆盖所有通道的中心线，并加上默认量程的半跨度
@@ -1251,14 +1269,7 @@ function initCharts() {
     // hfOption.yAxis.min = defaultYMinHF;
     // hfOption.yAxis.max = defaultYMaxHF;
     hfOption.legend = { show: false };
-    // 1--
-    // 设置高频图的图例数据，并仅默认显示前 3 条通道
-    // hfOption.legend.data = hfLegendData; // 设置高频图的图例数据
-    // const hfSelectedMap = {};
-    // for (let i = 0; i < NUM_CHANNELS; i++) {
-    //     hfSelectedMap[`HF Channel ${i + 1}`] = i < 3; // 仅前三条默认选中
-    // }
-    // hfOption.legend.selected = hfSelectedMap;
+
 
     for (let i = 0; i < NUM_CHANNELS; i++) {
         const initDataHF = generateNewSeriesData(i, 0.05, 1.0, channelStatesHF);
@@ -1277,6 +1288,8 @@ function initCharts() {
         });
     }
     chartHF.setOption(hfOption);
+    // 保存高频图的初始 dataZoom 状态
+    initialDataZoomHF = chartHF.getOption().dataZoom;
     createCustomLegend(chartHF, 'HF', channelColorsHF, channelLabelsHF);
 
     // 绑定鼠标事件以添加测量线
@@ -1302,8 +1315,8 @@ function initCharts() {
         const totalSamples = POINTS_PER_CHANNEL - 1; // 2599
         const msPerSample = 5 / totalSamples;        // 每个采样点对应毫秒数
         const ms = val * msPerSample;
-        const clamped = Math.max(0, Math.min(5, ms));
-        return clamped.toFixed(2) + ' ms';
+        // const clamped = Math.max(0, Math.min(5, ms));
+        return ms.toFixed(2) + ' ms';
     };
 
 
@@ -1336,6 +1349,7 @@ function initCharts() {
         });
     }
     chartLF.setOption(lfOption);
+    initialDataZoomLF = chartLF.getOption().dataZoom;
     createCustomLegend(chartLF, 'LF', channelColorsLF, channelLabelsLF);
 
     chartLF.getDom().addEventListener('mousedown', function (e) {
