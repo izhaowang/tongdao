@@ -435,7 +435,7 @@ function deleteMeasurementLinesOnChart(chart, lines) {
 /**
  * 更新图表上的测量线显示（使用 series id '__measure_lines__'）
  * @param {echarts.ECharts} chart
- * @param {Array<{x:number}>} lines
+ * @param {Array<{x:number, color:string}>} lines
  */
 function updateMeasurementLinesOnChart(chart, lines) {
     if (!chart) return;
@@ -473,7 +473,12 @@ function updateMeasurementLinesOnChart(chart, lines) {
                 id: id,
                 type: 'line',
                 shape: { x1: px, y1: topPixel, x2: px, y2: bottomPixel },
-                style: { stroke: '#ff5722', lineWidth: 1, lineDash: [6, 4], opacity: 0.9 },
+                style: {
+                    stroke: l.color || '#ff5722',   // 使用线存储的颜色，默认橙色
+                    lineWidth: 1,
+                    lineDash: [6, 4],
+                    opacity: 0.9
+                },
                 silent: true,
                 z: 1000
             });
@@ -588,14 +593,24 @@ function createArrowControls(chart, chartType) {
     const RECT_HEIGHT = 24;
     const TRIANGLE_WIDTH = 12;
 
+    // 获取绘图区域（grid）的像素范围，相对于容器
+    function getPlotAreaPixelRange() {
+        const topPixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, 5])[1];   // Y轴最大值
+        const bottomPixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, -5])[1]; // Y轴最小值
+        // 屏幕坐标系中，topPixel < bottomPixel
+
+        return {
+            top: Math.min(topPixel, bottomPixel),
+            bottom: Math.max(topPixel, bottomPixel)
+        };
+    }
     // 计算初始固定位置（按通道索引均匀分布，留出边距）
     function computeFixedPositions() {
-        const containerHeight = container.clientHeight;
-        // 在垂直居中位置基础上增加偏移量（例如 50px），使其更靠近底部
-        const offset = 25; // 可根据需要调整此值
-        let fixedTop = (containerHeight - RECT_HEIGHT) / 2 + offset;
-        // 确保不超出容器范围
-        fixedTop = Math.max(0, Math.min(containerHeight - RECT_HEIGHT, fixedTop));
+        const { top: plotTop, bottom: plotBottom } = getPlotAreaPixelRange();
+        // 将所有箭头初始放置在绘图区域的中间偏下位置（可根据需要调整）
+        let fixedTop = (plotTop + plotBottom) / 2 - RECT_HEIGHT / 2;
+        // 限制在容器范围内
+        fixedTop = Math.max(0, Math.min(container.clientHeight - RECT_HEIGHT, fixedTop));
         for (let i = 0; i < NUM_CHANNELS; i++) {
             fixedTopArray[i] = fixedTop;
         }
@@ -605,9 +620,20 @@ function createArrowControls(chart, chartType) {
 
     // 应用固定位置到所有箭头
     function applyFixedPositions() {
+        const plotRange = getPlotAreaPixelRange();
+        const minY = plotRange.top - RECT_HEIGHT / 2;
+        const maxY = plotRange.bottom - RECT_HEIGHT / 2;
+        const containerMinY = 0;
+        const containerMaxY = container.clientHeight - RECT_HEIGHT;
+
         arrowsArray.forEach((el, i) => {
             if (el && el.dataset.legendVisible !== 'false') {
-                el.style.top = fixedTopArray[i] + 'px';
+                let top = fixedTopArray[i];
+                // 先限制在绘图区域内
+                top = Math.max(minY, Math.min(maxY, top));
+                // 再限制容器边界
+                top = Math.max(containerMinY, Math.min(containerMaxY, top));
+                el.style.top = top + 'px';
             }
         });
     }
@@ -704,13 +730,12 @@ function createArrowControls(chart, chartType) {
 
             // 判断移动距离是否超过阈值（3像素）
             if (Math.abs(currentY - dragStartY) > 3) {
-                // 如果是第一次超过阈值（即刚进入拖拽状态），执行通道切换
                 if (!moved) {
                     const id = `${chartType}_${i + 1}`;
                     currentSelectedChannelId = id;
                     channelSelect.value = id;
                     rgSelect.value = channelRanges.get(id);
-                    applyRangeToChart(); // 应用该通道的量程
+                    applyRangeToChart();
                 }
                 moved = true;
             }
@@ -722,13 +747,31 @@ function createArrowControls(chart, chartType) {
             fixedTopArray[i] = newTop;
             el.style.top = newTop + 'px';
 
-            // 计算并应用通道偏移
+            // 计算数据坐标
             try {
                 const dataPos = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, newTop + el.offsetHeight / 2]);
                 const newCenter = dataPos[1];
+
+                // 获取当前通道的基准线
                 const base = BASE_VERTICAL_OFFSET + i * VERTICAL_OFFSET_PER_CHANNEL;
                 const newAdjust = newCenter - base;
                 applyChannelAdjust(i, chartType, newAdjust);
+                // 获取更新后的 adjust（虽然理论上和 newAdjust 一样，但为了保险）
+                const updatedAdjust = chartType === 'HF' ? channelAdjustHF[i] : channelAdjustLF[i];
+                const updatedCenter = base + updatedAdjust;
+                const updatedPixel = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [0, updatedCenter]);
+                let updatedTop = updatedPixel[1] - el.offsetHeight / 2;
+                // 同样应用范围限制
+                const plotRange = getPlotAreaPixelRange();
+                const minY = plotRange.top + el.offsetHeight / 2 ;
+                const maxY = plotRange.bottom - el.offsetHeight / 2;
+                const containerMinY = 0;
+                const containerMaxY = container.clientHeight - el.offsetHeight;
+                updatedTop = Math.max(minY, Math.min(maxY, updatedTop));
+                updatedTop = Math.max(containerMinY, Math.min(containerMaxY, updatedTop));
+                fixedTopArray[i] = updatedTop;
+                el.style.top = updatedTop + 'px';
+
             } catch (err) {
                 // 忽略转换错误
             }
@@ -877,19 +920,22 @@ function createArrowControls(chart, chartType) {
  * @param {Array<Array<Array<number>>>} buffers
  * @param {Array<Object>} linesArray
  * @param {number} xValue
+ * @param {string} color 测量线颜色
  */
-function addMeasurementLine(chart, buffers, linesArray, xValue) {
+function addMeasurementLine(chart, buffers, linesArray, xValue, color) {
     // 保证最多两个
     if (linesArray.length >= 2) {
         linesArray.shift();
     }
-    linesArray.push({ x: xValue });
+    linesArray.push({ x: xValue, color: color });
     updateMeasurementLinesOnChart(chart, linesArray);
     const intersections = computeIntersections(buffers, xValue);
     console.log('Measurement at x=', xValue, intersections);
     return intersections;
 }
-
+/**
+ * 处理图表的鼠标按下事件：左键或右键都用于添加测量线（分别触发）
+ */
 /**
  * 处理图表的鼠标按下事件：左键或右键都用于添加测量线（分别触发）
  */
@@ -929,7 +975,9 @@ function handleChartMouseDown(e, chart, buffers, linesArray) {
     }
     const dataPoint = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [offsetX, offsetY]);
     const xValue = dataPoint[0];
-    const points = addMeasurementLine(chart, buffers, linesArray, xValue);
+    // 根据左键/右键设置颜色：左键橙色，右键绿色（可自行修改）
+    const color = e.button === 0 ? '#ff5722' : '#00aa00';
+    const points = addMeasurementLine(chart, buffers, linesArray, xValue, color);
     // 同时返回并打印交点信息（开发者可调用 window.getMeasurements）
     return points;
 }
@@ -1141,10 +1189,10 @@ function initCharts() {
     });
 
 
-    // 生成图例数据
-    // 生成图例数据（仅用于自定义图例）
-    const hfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `HF Channel ${i + 1}`);
-    const lfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `LF Channel ${i + 1}`);
+    // // 生成图例数据
+    // // 生成图例数据（仅用于自定义图例）
+    // const hfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `HF Channel ${i + 1}`);
+    // const lfLegendData = Array.from({ length: NUM_CHANNELS }, (_, i) => `LF Channel ${i + 1}`);
 
     // 基础图表配置
     const baseOption = {
@@ -1230,22 +1278,22 @@ function initCharts() {
                 type: 'inside', // 内置型数据区域缩放
                 xAxisIndex: 0, // 作用于第一个X轴
                 zoomOnMouseWheel: true, // 鼠标滚轮缩放X轴
-                moveOnMouseMove: true, // 鼠标移动平移X轴
+                moveOnMouseMove: false, // 鼠标移动平移X轴
                 moveOnMouseWheel: false, // 鼠标滚轮不平移X轴
                 preventDefaultMouseMove: false,
                 filterMode: 'filter', // 过滤数据，只显示在范围内的数据
                 start: 44.24,          // 新增
                 end: 55.8             // 新增
             },
-            {
-                type: 'inside', // 内置型数据区域缩放
-                yAxisIndex: 0, // 作用于第一个Y轴
-                zoomOnMouseWheel: true, // 鼠标滚轮缩放Y轴
-                moveOnMouseMove: true, // 鼠标移动平移Y轴
-                moveOnMouseWheel: false, // 鼠标滚轮不平移Y轴
-                preventDefaultMouseMove: false,
-                filterMode: 'none' // Y轴缩放不隐藏其他数据，只改变显示范围
-            }
+            // {
+            //     type: 'inside', // 内置型数据区域缩放
+            //     yAxisIndex: 0, // 作用于第一个Y轴
+            //     zoomOnMouseWheel: true, // 鼠标滚轮缩放Y轴
+            //     moveOnMouseMove: true, // 鼠标移动平移Y轴
+            //     moveOnMouseWheel: false, // 鼠标滚轮不平移Y轴
+            //     preventDefaultMouseMove: false,
+            //     filterMode: 'none' // Y轴缩放不隐藏其他数据，只改变显示范围
+            // }
         ],
         series: []
     };
@@ -1320,10 +1368,10 @@ function initCharts() {
     };
 
 
-    const defaultYMinLF = getVerticalOffset(0, 'LF') - defaultRangeConfig.span / 2;
-    const defaultYMaxLF = getVerticalOffset(NUM_CHANNELS - 1, 'LF') + defaultRangeConfig.span / 2;
-    lfOption.yAxis.min = defaultYMinLF;
-    lfOption.yAxis.max = defaultYMaxLF;
+    // const defaultYMinLF = getVerticalOffset(0, 'LF') - defaultRangeConfig.span / 2;
+    // const defaultYMaxLF = getVerticalOffset(NUM_CHANNELS - 1, 'LF') + defaultRangeConfig.span / 2;
+    // lfOption.yAxis.min = defaultYMinLF;
+    // lfOption.yAxis.max = defaultYMaxLF;
 
     lfOption.legend = { show: false };   //
 
