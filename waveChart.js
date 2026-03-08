@@ -368,15 +368,20 @@ function applyRangeToChart() {
     }
 }
 
+
 /**
- * 在给定数据缓冲中，按 x 值线性插值得到每个 series 与垂直线的交点
- * @param {Array<Array<Array<number>>>} buffers 每个通道的数据缓冲，buffers[channelIndex] = [[x,y],...]
+ * 在给定数据缓冲中，按 x 值线性插值得到每个可见 series 与垂直线的交点
+ * @param {Array<Array<Array<number>>>} buffers 每个通道的数据缓冲
  * @param {number} xValue 垂直线的 x 值
- * @returns {Array<Array<number>>} 交点数组 [[x,y], ...]
+ * @param {Array<boolean>} visibleArray 通道显隐状态数组
+ * @returns {Array<Array<number>>} 交点数组 [[x,y], ...] 顺序对应可见通道
  */
-function computeIntersections(buffers, xValue) {
+function computeIntersections(buffers, xValue, visibleArray) {
     const results = [];
     for (let i = 0; i < buffers.length; i++) {
+        // 跳过不可见通道
+        if (!visibleArray[i]) continue;
+
         const buf = buffers[i];
         if (!buf || buf.length === 0) continue;
         // 找到第一个使得 buf[j][0] <= xValue <= buf[j+1][0]
@@ -915,27 +920,51 @@ function createArrowControls(chart, chartType) {
 }
 
 /**
- * 添加测量线（最多保留两个，若超出则移除最旧的），并返回该测量线与所有通道的交点
+ * 添加测量线（最多保留两个），并返回该测量线与可见通道的交点
  * @param {echarts.ECharts} chart
  * @param {Array<Array<Array<number>>>} buffers
  * @param {Array<Object>} linesArray
  * @param {number} xValue
  * @param {string} color 测量线颜色
+ * @param {Array<boolean>} visibleArray 通道显隐状态
  */
-function addMeasurementLine(chart, buffers, linesArray, xValue, color) {
+function addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray) {
     // 保证最多两个
     if (linesArray.length >= 2) {
         linesArray.shift();
     }
     linesArray.push({ x: xValue, color: color });
     updateMeasurementLinesOnChart(chart, linesArray);
-    const intersections = computeIntersections(buffers, xValue);
-    console.log('Measurement at x=', xValue, intersections);
+    const intersections = computeIntersections(buffers, xValue, visibleArray);
+
+    // 根据图表类型将 xValue 转换为时间显示
+    let timeStr;
+    if (chart === chartHF) {
+        const us = xValue * 20 / (POINTS_PER_CHANNEL - 1);
+        timeStr = us.toFixed(2) + ' µs';
+    } else if (chart === chartLF) {
+        const ms = xValue * 5 / (POINTS_PER_CHANNEL - 1);
+        timeStr = ms.toFixed(2) + ' ms';
+    } else {
+        timeStr = xValue; // fallback
+    }
+
+    // 将交点数组中的 x 坐标也转换为时间值，仅用于打印
+    const convertedIntersections = intersections.map(point => {
+        let timeValue;
+        if (chart === chartHF) {
+            timeValue = point[0] * 20 / (POINTS_PER_CHANNEL - 1);
+        } else if (chart === chartLF) {
+            timeValue = point[0] * 5 / (POINTS_PER_CHANNEL - 1);
+        } else {
+            timeValue = point[0];
+        }
+        return [timeValue.toFixed(2), point[1]];
+    });
+
+    console.log('Measurement at', timeStr, convertedIntersections);
     return intersections;
 }
-/**
- * 处理图表的鼠标按下事件：左键或右键都用于添加测量线（分别触发）
- */
 /**
  * 处理图表的鼠标按下事件：左键或右键都用于添加测量线（分别触发）
  */
@@ -975,9 +1004,20 @@ function handleChartMouseDown(e, chart, buffers, linesArray) {
     }
     const dataPoint = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [offsetX, offsetY]);
     const xValue = dataPoint[0];
-    // 根据左键/右键设置颜色：左键橙色，右键绿色（可自行修改）
+    // 根据左键/右键设置颜色：左键橙色，右键绿色
     const color = e.button === 0 ? '#ff5722' : '#00aa00';
-    const points = addMeasurementLine(chart, buffers, linesArray, xValue, color);
+
+    // 获取当前图表的可见通道状态
+    let visibleArray;
+    if (chart === chartHF) {
+        visibleArray = channelVisibleHF;
+    } else if (chart === chartLF) {
+        visibleArray = channelVisibleLF;
+    } else {
+        visibleArray = Array(NUM_CHANNELS).fill(true); // fallback
+    }
+
+    const points = addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray);
     // 同时返回并打印交点信息（开发者可调用 window.getMeasurements）
     return points;
 }
