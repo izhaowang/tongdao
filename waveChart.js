@@ -759,7 +759,14 @@ function createArrowControls(chart, chartType) {
 
                 // 获取当前通道的基准线
                 const base = BASE_VERTICAL_OFFSET + i * VERTICAL_OFFSET_PER_CHANNEL;
-                const newAdjust = newCenter - base;
+                // Y轴固定范围 ±5V
+                const yMin = -5;
+                const yMax = 5;
+                const minAdjust = yMin - base;
+                const maxAdjust = yMax - base;
+                let newAdjust = newCenter - base;
+                // 裁剪 newAdjust 到允许范围内
+                newAdjust = Math.max(minAdjust, Math.min(maxAdjust, newAdjust));
                 applyChannelAdjust(i, chartType, newAdjust);
                 // 获取更新后的 adjust（虽然理论上和 newAdjust 一样，但为了保险）
                 const updatedAdjust = chartType === 'HF' ? channelAdjustHF[i] : channelAdjustLF[i];
@@ -768,7 +775,7 @@ function createArrowControls(chart, chartType) {
                 let updatedTop = updatedPixel[1] - el.offsetHeight / 2;
                 // 同样应用范围限制
                 const plotRange = getPlotAreaPixelRange();
-                const minY = plotRange.top + el.offsetHeight / 2 ;
+                const minY = plotRange.top + el.offsetHeight / 2;
                 const maxY = plotRange.bottom - el.offsetHeight / 2;
                 const containerMinY = 0;
                 const containerMaxY = container.clientHeight - el.offsetHeight;
@@ -920,20 +927,25 @@ function createArrowControls(chart, chartType) {
 }
 
 /**
- * 添加测量线（最多保留两个），并返回该测量线与可见通道的交点
+ * 添加测量线（最多保留两条：左键一条、右键一条），并返回该测量线与可见通道的交点
  * @param {echarts.ECharts} chart
  * @param {Array<Array<Array<number>>>} buffers
  * @param {Array<Object>} linesArray
  * @param {number} xValue
  * @param {string} color 测量线颜色
  * @param {Array<boolean>} visibleArray 通道显隐状态
+ * @param {string} button 按键类型 'left' 或 'right'
  */
-function addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray) {
-    // 保证最多两个
-    if (linesArray.length >= 2) {
-        linesArray.shift();
+function addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray, button) {
+    // 查找并移除同类型的旧线
+    for (let i = linesArray.length - 1; i >= 0; i--) {
+        if (linesArray[i].button === button) {
+            linesArray.splice(i, 1);
+            break; // 每种类型最多一条，找到后即可停止
+        }
     }
-    linesArray.push({ x: xValue, color: color });
+    // 添加新线
+    linesArray.push({ x: xValue, color: color, button: button });
     updateMeasurementLinesOnChart(chart, linesArray);
     const intersections = computeIntersections(buffers, xValue, visibleArray);
 
@@ -1004,8 +1016,9 @@ function handleChartMouseDown(e, chart, buffers, linesArray) {
     }
     const dataPoint = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [offsetX, offsetY]);
     const xValue = dataPoint[0];
-    // 根据左键/右键设置颜色：左键橙色，右键绿色
+    // 根据左键/右键设置颜色和按钮类型
     const color = e.button === 0 ? '#ff5722' : '#00aa00';
+    const button = e.button === 0 ? 'left' : 'right';
 
     // 获取当前图表的可见通道状态
     let visibleArray;
@@ -1017,7 +1030,7 @@ function handleChartMouseDown(e, chart, buffers, linesArray) {
         visibleArray = Array(NUM_CHANNELS).fill(true); // fallback
     }
 
-    const points = addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray);
+    const points = addMeasurementLine(chart, buffers, linesArray, xValue, color, visibleArray, button);
     // 同时返回并打印交点信息（开发者可调用 window.getMeasurements）
     return points;
 }
