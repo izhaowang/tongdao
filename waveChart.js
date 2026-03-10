@@ -917,6 +917,9 @@ function createArrowControls(chart, chartType) {
     // 监听 dataZoom 事件：缩放后重新应用固定位置（确保箭头不动）
     chart.on('datazoom', function () {
         applyFixedPositions();
+        // 更新标线位置
+        const linesArray = chartType === 'HF' ? measurementLinesHF : measurementLinesLF;
+        updateMeasurementLinesOnChart(chart, linesArray);
     });
 
     // 窗口大小变化时重新计算固定位置
